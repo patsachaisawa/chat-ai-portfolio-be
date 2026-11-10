@@ -69,7 +69,7 @@ ${portfolioContext}
       parts: [{ text: row.message }],
     }));
 
-    // 7. เรียกใช้งาน Gemini 3.8 Flash
+    // 7. เรียกใช้งาน Gemini 3.6 Flash
     const result = await model.generateContent({
       contents: chatMessagesForAI,
       systemInstruction: systemInstruction,
