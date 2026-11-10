@@ -4,8 +4,9 @@
   "description": "Backend ของ mini chat (Express + TypeScript + PostgreSQL + Gemini)",
   "main": "src/app.ts",
   "scripts": {
+    "build": "tsc",
     "dev": "tsx watch src/app.ts",
-    "start": "tsx src/app.ts",
+    "start": "node dist/app.js",
     "check": "tsc --noEmit",
     "test": "tsx --test src/app.test.ts src/reply.test.ts",
     "seed": "tsx src/seed.ts"
