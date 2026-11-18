@@ -11,7 +11,10 @@ const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || 'gemini-3.
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-const MAX_ATTEMPTS_PER_MODEL = 3;
+const MAX_ATTEMPTS_PER_MODEL = 2;
+// จำกัดเวลาต่อคำขอ และเวลารวมทั้งหมด กันผู้ใช้รอนานเมื่อ Gemini ติดขัด
+const REQUEST_TIMEOUT_MS = 12_000;
+const TOTAL_BUDGET_MS = 30_000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -25,11 +28,13 @@ function getErrorStatus(error: unknown): number | undefined {
 async function generateWithRetry(request: Parameters<ReturnType<typeof genAI.getGenerativeModel>['generateContent']>[0]) {
   const models = [GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS.filter((m) => m !== GEMINI_MODEL)];
   let lastError: unknown;
+  const deadline = Date.now() + TOTAL_BUDGET_MS;
 
   for (const modelName of models) {
-    const model = genAI.getGenerativeModel({ model: modelName });
+    const model = genAI.getGenerativeModel({ model: modelName }, { timeout: REQUEST_TIMEOUT_MS });
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
+      if (Date.now() >= deadline) throw lastError ?? new Error('Gemini time budget exceeded');
       try {
         return await model.generateContent(request);
       } catch (error) {
@@ -39,7 +44,7 @@ async function generateWithRetry(request: Parameters<ReturnType<typeof genAI.get
 
         // error ที่ไม่ใช่ชั่วคราว (เช่น คีย์ผิด 400/403, ไม่พบโมเดล 404) ข้ามไปโมเดลถัดไปทันที
         if (status === undefined || !RETRYABLE_STATUS.has(status)) break;
-        if (attempt < MAX_ATTEMPTS_PER_MODEL) await sleep(1000 * 2 ** (attempt - 1)); // 1s, 2s
+        if (attempt < MAX_ATTEMPTS_PER_MODEL) await sleep(1000); // รอ 1 วินาทีก่อนลองซ้ำ
       }
     }
   }
@@ -140,7 +145,8 @@ ${portfolioContext}
     const detail = error instanceof Error ? error.message : String(error);
 
     // Gemini ติดขัดชั่วคราว: ตอบ 503 พร้อมข้อความที่ผู้ใช้อ่านเข้าใจได้
-    if (getErrorStatus(error) === 503) {
+    const isTimeout = /abort|timeout|timed out/i.test(detail);
+    if (getErrorStatus(error) === 503 || isTimeout) {
       return res.status(503).json({ error: 'ระบบ AI กำลังมีผู้ใช้งานจำนวนมาก กรุณาลองใหม่อีกครั้งในอีกสักครู่' });
     }
 
