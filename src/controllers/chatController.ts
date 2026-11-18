@@ -10,7 +10,10 @@ const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || 'gemini-3.
   .filter(Boolean);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+// ลองซ้ำเฉพาะ error ฝั่งเซิร์ฟเวอร์ชั่วคราว
+// ไม่ลองซ้ำ 429 (โควตาหมด) เพราะลองซ้ำไม่ช่วย และยิ่งกินโควตา Free Tier (20 คำขอ/วัน/โมเดล) ให้หมดเร็วขึ้น
+// เมื่อเจอ 429 จะข้ามไปโมเดลสำรองทันที
+const RETRYABLE_STATUS = new Set([500, 502, 503, 504]);
 const MAX_ATTEMPTS_PER_MODEL = 2;
 // จำกัดเวลาต่อคำขอ และเวลารวมทั้งหมด กันผู้ใช้รอนานเมื่อ Gemini ติดขัด
 const REQUEST_TIMEOUT_MS = 12_000;
@@ -145,6 +148,11 @@ ${portfolioContext}
     const detail = error instanceof Error ? error.message : String(error);
 
     // Gemini ติดขัดชั่วคราว: ตอบ 503 พร้อมข้อความที่ผู้ใช้อ่านเข้าใจได้
+    // โควตา Gemini หมด (429): แจ้งผู้ใช้ตรงๆ แทนข้อความ error ทั่วไป
+    if (getErrorStatus(error) === 429) {
+      return res.status(429).json({ error: 'โควตาการใช้งาน AI ของวันนี้เต็มแล้ว กรุณาลองใหม่ภายหลัง' });
+    }
+
     const isTimeout = /abort|timeout|timed out/i.test(detail);
     if (getErrorStatus(error) === 503 || isTimeout) {
       return res.status(503).json({ error: 'ระบบ AI กำลังมีผู้ใช้งานจำนวนมาก กรุณาลองใหม่อีกครั้งในอีกสักครู่' });
