@@ -3,8 +3,49 @@ import { pool } from '../config/database';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+// โมเดลสำรอง (คั่นด้วย ,) ใช้เมื่อโมเดลหลักติดขัดต่อเนื่อง เช่น 503 high demand
+const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || 'gemini-2.5-flash')
+  .split(',')
+  .map((m) => m.trim())
+  .filter(Boolean);
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const MAX_ATTEMPTS_PER_MODEL = 3;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function getErrorStatus(error: unknown): number | undefined {
+  return typeof error === 'object' && error !== null && 'status' in error
+    ? Number((error as { status: unknown }).status)
+    : undefined;
+}
+
+// เรียก Gemini โดยลองซ้ำ (backoff) เมื่อ error ชั่วคราว แล้วค่อยสลับไปโมเดลสำรอง
+async function generateWithRetry(request: Parameters<ReturnType<typeof genAI.getGenerativeModel>['generateContent']>[0]) {
+  const models = [GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS.filter((m) => m !== GEMINI_MODEL)];
+  let lastError: unknown;
+
+  for (const modelName of models) {
+    const model = genAI.getGenerativeModel({ model: modelName });
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
+      try {
+        return await model.generateContent(request);
+      } catch (error) {
+        lastError = error;
+        const status = getErrorStatus(error);
+        console.warn(`[Gemini] ${modelName} attempt ${attempt}/${MAX_ATTEMPTS_PER_MODEL} failed (status ${status ?? 'n/a'})`);
+
+        // error ที่ไม่ใช่ชั่วคราว (เช่น คีย์ผิด 400/403, ไม่พบโมเดล 404) ข้ามไปโมเดลถัดไปทันที
+        if (status === undefined || !RETRYABLE_STATUS.has(status)) break;
+        if (attempt < MAX_ATTEMPTS_PER_MODEL) await sleep(1000 * 2 ** (attempt - 1)); // 1s, 2s
+      }
+    }
+  }
+
+  throw lastError;
+}
 
 // ฟังก์ชันดึงข้อมูล Portfolio ทั้งหมดจาก DB มารวมเป็น JSON String
 async function getPortfolioContext() {
@@ -78,7 +119,7 @@ ${portfolioContext}
     }));
 
     // 7. เรียกใช้งาน Gemini 3.6 Flash
-    const result = await model.generateContent({
+    const result = await generateWithRetry({
       contents: chatMessagesForAI,
       systemInstruction: systemInstruction,
     });
@@ -97,6 +138,12 @@ ${portfolioContext}
   } catch (error) {
     console.error('Chat error:', error);
     const detail = error instanceof Error ? error.message : String(error);
+
+    // Gemini ติดขัดชั่วคราว: ตอบ 503 พร้อมข้อความที่ผู้ใช้อ่านเข้าใจได้
+    if (getErrorStatus(error) === 503) {
+      return res.status(503).json({ error: 'ระบบ AI กำลังมีผู้ใช้งานจำนวนมาก กรุณาลองใหม่อีกครั้งในอีกสักครู่' });
+    }
+
     return res.status(500).json({
       error: 'Internal Server Error',
       // แสดงรายละเอียดเฉพาะนอก production เพื่อไม่เปิดเผยข้อมูลภายใน
