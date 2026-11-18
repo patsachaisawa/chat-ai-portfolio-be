@@ -2,8 +2,9 @@ import { Request, Response } from 'express';
 import { pool } from '../config/database';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-const model = genAI.getGenerativeModel({ model: 'gemini-3.6-flash' });
+const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
 // ฟังก์ชันดึงข้อมูล Portfolio ทั้งหมดจาก DB มารวมเป็น JSON String
 async function getPortfolioContext() {
@@ -31,6 +32,13 @@ export const handleChatMessage = async (req: Request, res: Response) => {
 
     if (!sessionId || !message) {
       return res.status(400).json({ error: 'sessionId and message are required' });
+    }
+
+    // ตรวจ env ที่จำเป็น ให้ error ชัดเจนแทนที่จะล้มเงียบ ๆ
+    const missingEnv = ['GEMINI_API_KEY', 'DATABASE_URL'].filter((k) => !process.env[k]);
+    if (missingEnv.length > 0) {
+      console.error(`Chat error: missing environment variables: ${missingEnv.join(', ')}`);
+      return res.status(500).json({ error: `Server misconfigured: missing ${missingEnv.join(', ')}` });
     }
 
     // 1. ตรวจสอบและสร้าง sessionId ในตาราง chat_sessions ก่อน (ป้องกัน Foreign Key Error)
@@ -88,6 +96,11 @@ ${portfolioContext}
     });
   } catch (error) {
     console.error('Chat error:', error);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    const detail = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({
+      error: 'Internal Server Error',
+      // แสดงรายละเอียดเฉพาะนอก production เพื่อไม่เปิดเผยข้อมูลภายใน
+      ...(process.env.NODE_ENV !== 'production' && { detail }),
+    });
   }
 };
