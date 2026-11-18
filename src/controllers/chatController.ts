@@ -4,7 +4,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 // โมเดลสำรอง (คั่นด้วย ,) ใช้เมื่อโมเดลหลักติดขัดต่อเนื่อง เช่น 503 high demand
-const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || 'gemini-2.5-flash')
+const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS || 'gemini-3.8-flash')
   .split(',')
   .map((m) => m.trim())
   .filter(Boolean);
