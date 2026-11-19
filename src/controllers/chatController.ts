@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { pool } from '../config/database';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { getQuota, markExhausted, recordAttempt } from '../services/quota';
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 // โมเดลสำรอง (คั่นด้วย ,) ใช้เมื่อโมเดลหลักติดขัดต่อเนื่อง เช่น 503 high demand
@@ -39,10 +40,12 @@ async function generateWithRetry(request: Parameters<ReturnType<typeof genAI.get
     for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
       if (Date.now() >= deadline) throw lastError ?? new Error('Gemini time budget exceeded');
       try {
+        recordAttempt(modelName);
         return await model.generateContent(request);
       } catch (error) {
         lastError = error;
         const status = getErrorStatus(error);
+        if (status === 429) markExhausted(modelName);
         console.warn(`[Gemini] ${modelName} attempt ${attempt}/${MAX_ATTEMPTS_PER_MODEL} failed (status ${status ?? 'n/a'})`);
 
         // error ที่ไม่ใช่ชั่วคราว (เช่น คีย์ผิด 400/403, ไม่พบโมเดล 404) ข้ามไปโมเดลถัดไปทันที
@@ -163,5 +166,15 @@ ${portfolioContext}
       // แสดงรายละเอียดเฉพาะนอก production เพื่อไม่เปิดเผยข้อมูลภายใน
       ...(process.env.NODE_ENV !== 'production' && { detail }),
     });
+  }
+};
+
+// GET /api/quota : ประมาณการโควตา Gemini ที่เหลือของโมเดลหลัก (ใช้แสดงแถบ HP ฝั่งหน้าเว็บ)
+export const handleQuota = async (_req: Request, res: Response) => {
+  try {
+    return res.status(200).json(await getQuota(GEMINI_MODEL));
+  } catch (error) {
+    console.error('Quota error:', error);
+    return res.status(500).json({ error: 'Internal Server Error' });
   }
 };
